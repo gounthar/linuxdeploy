@@ -6,18 +6,6 @@ sudo: required
 
 matrix:
   include:
-    - name: CentOS 6 aarch64 build
-      env: ARCH=aarch64 BUILD_TYPE=centos6
-      arch: arm64
-      install: true
-      services:
-        - docker
-      script: travis/build-centos6-docker.sh
-      after_success:
-        - if [ "$TRAVIS_BRANCH" != "$TRAVIS_TAG" ] && [ "$TRAVIS_BRANCH" != "master" ]; then export TRAVIS_EVENT_TYPE=pull_request; fi
-        - wget -c https://github.com/probonopd/uploadtool/raw/master/upload.sh
-        - bash upload.sh linuxdeploy-"$ARCH".AppImage*
-
     - name: Ubuntu xenial aarch64 coverage build (no binaries uploaded)
       env: ARCH=aarch64 BUILD_TYPE=coverage
       arch: arm64
