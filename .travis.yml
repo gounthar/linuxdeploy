@@ -20,7 +20,7 @@ matrix:
             - cimg-dev
       before_script:
         - sudo pip install gcovr
-      script: travis/test-coverage.sh
+      script: travis/test-coverage.sh && travis/build.sh
       after_success: true  # also, we don't intend to upload release binaries
 ss: true  # also, we don't intend to upload release binaries
 
