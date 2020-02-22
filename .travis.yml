@@ -1,10 +1,14 @@
+arch:
+  - arm64
+  
 language: cpp
 sudo: required
 
 matrix:
   include:
-    - name: CentOS 6 x86_64 build
-      env: ARCH=x86_64 BUILD_TYPE=centos6
+    - name: CentOS 6 aarch64 build
+      env: ARCH=aarch64 BUILD_TYPE=centos6
+      arch: arm64
       install: true
       services:
         - docker
@@ -14,19 +18,9 @@ matrix:
         - wget -c https://github.com/probonopd/uploadtool/raw/master/upload.sh
         - bash upload.sh linuxdeploy-"$ARCH".AppImage*
 
-    - name: CentOS 6 i386 build
-      env: ARCH=i386 BUILD_TYPE=centos6
-      install: true
-      services:
-        - docker
-      script: travis/build-centos6-docker.sh
-      after_success:
-        - if [ "$TRAVIS_BRANCH" != "$TRAVIS_TAG" ] && [ "$TRAVIS_BRANCH" != "master" ]; then export TRAVIS_EVENT_TYPE=pull_request; fi
-        - wget -c https://github.com/probonopd/uploadtool/raw/master/upload.sh
-        - bash upload.sh linuxdeploy-"$ARCH".AppImage*
-
-    - name: Ubuntu xenial x86_64 coverage build (no binaries uploaded)
-      env: ARCH=x86_64 BUILD_TYPE=coverage
+    - name: Ubuntu xenial aarch64 coverage build (no binaries uploaded)
+      env: ARCH=aarch64 BUILD_TYPE=coverage
+      arch: arm64
       dist: xenial
       addons:
         apt:
@@ -40,25 +34,7 @@ matrix:
         - sudo pip install gcovr
       script: travis/test-coverage.sh
       after_success: true  # also, we don't intend to upload release binaries
-
-    - name: Ubuntu xenial i386 coverage build (no binaries uploaded)
-      env: ARCH=i386 BUILD_TYPE=coverage
-      dist: xenial
-      addons:
-        apt:
-          update: true
-          packages:
-            - libmagic-dev:i386
-            - libjpeg-dev:i386
-            - libpng-dev:i386
-            - gcc-multilib
-            - g++-multilib
-            - libfuse2:i386
-            - libcairo2:i386
-      before_script:
-        - sudo pip install gcovr
-      script: travis/test-coverage.sh
-      after_success: true  # also, we don't intend to upload release binaries
+ss: true  # also, we don't intend to upload release binaries
 
 branches:
   except:
