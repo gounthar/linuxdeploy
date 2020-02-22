@@ -18,6 +18,7 @@ matrix:
             - libjpeg-dev
             - libpng-dev
             - cimg-dev
+            - patchelf
       before_script:
         - sudo pip install gcovr
       script: travis/test-coverage.sh && travis/build.sh
