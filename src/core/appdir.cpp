@@ -1,5 +1,6 @@
 // system headers
 #include <set>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -7,7 +8,6 @@
 #include <boost/filesystem.hpp>
 #include <CImg.h>
 #include <fnmatch.h>
-#include <subprocess.hpp>
 
 
 // local headers
@@ -16,6 +16,7 @@
 #include "linuxdeploy/core/log.h"
 #include "linuxdeploy/desktopfile/desktopfileentry.h"
 #include "linuxdeploy/util/util.h"
+#include "linuxdeploy/subprocess/subprocess.h"
 #include "copyright.h"
 
 // auto-generated headers
@@ -58,7 +59,7 @@ namespace linuxdeploy {
                     bool disableCopyrightFilesDeployment = false;
 
                 public:
-                    PrivateData() : copyOperations(), stripOperations(), setElfRPathOperations(), visitedFiles(), appDirPath(), appName() {
+                    PrivateData() : copyOperations(), stripOperations(), setElfRPathOperations(), visitedFiles(), appDirPath() {
                         copyrightFilesManager = copyright::ICopyrightFilesManager::getInstance();
                     };
 
@@ -187,19 +188,15 @@ namespace linuxdeploy {
                                 } else {
                                     ldLog() << "Calling strip on library" << filePath << std::endl;
 
-                                    std::map<std::string, std::string> env;
+                                    subprocess::subprocess_env_map_t env;
                                     env.insert(std::make_pair(std::string("LC_ALL"), std::string("C")));
 
-                                    subprocess::Popen proc(
-                                        {stripPath.c_str(), filePath.c_str()},
-                                        subprocess::output(subprocess::PIPE),
-                                        subprocess::error(subprocess::PIPE),
-                                        subprocess::environment(env)
-                                    );
+                                    subprocess::subprocess proc({stripPath, filePath.string()}, env);
 
-                                    std::string err = util::subprocess::check_output_error(proc).second;
+                                    const auto result = proc.run();
+                                    const auto& err = result.stderr_string();
 
-                                    if (proc.retcode() != 0 &&
+                                    if (result.exit_code() != 0 &&
                                         !util::stringContains(err, "Not enough room for program headers")) {
                                         ldLog() << LD_ERROR << "Strip call failed:" << err << std::endl;
                                         success = false;
@@ -470,7 +467,7 @@ namespace linuxdeploy {
                         return true;
                     }
 
-                    bool deployIcon(const bf::path& path) {
+                    bool deployIcon(const bf::path& path, const std::string targetFilename = "") {
                         if (hasBeenVisitedAlready(path)) {
                             ldLog() << LD_DEBUG << "File has been visited already:" << path << std::endl;
                             return true;
@@ -538,12 +535,14 @@ namespace linuxdeploy {
                             }
                         }
 
-                        // rename files like <appname>_*.ext to <appname>.ext
                         auto filename = path.filename().string();
-                        if (!appName.empty() && util::stringStartsWith(path.string(), appName)) {
-                            auto newFilename = appName + path.extension().string();
+
+                        // if the user wants us to automatically rename icon files, we can do so
+                        // this is useful when passing multiple icons via -i in different resolutions
+                        if (!targetFilename.empty()) {
+                            auto newFilename = targetFilename + path.extension().string();
                             if (newFilename != filename) {
-                                ldLog() << LD_WARNING << "Renaming icon" << path << "to" << newFilename << std::endl;
+                                ldLog() << LD_WARNING << "Changing name of icon" << path << "to target filename" << newFilename << std::endl;
                                 filename = newFilename;
                             }
                         }
@@ -621,9 +620,13 @@ namespace linuxdeploy {
             bool AppDir::deployDesktopFile(const DesktopFile& desktopFile) {
                 return d->deployDesktopFile(desktopFile);
             }
- 
+
             bool AppDir::deployIcon(const bf::path& path) {
                 return d->deployIcon(path);
+            }
+
+            bool AppDir::deployIcon(const bf::path& path, const std::string& targetFilename) {
+                return d->deployIcon(path, targetFilename);
             }
 
             bool AppDir::executeDeferredOperations() {
@@ -820,6 +823,61 @@ namespace linuxdeploy {
                         }
                     }
                 }
+
+                return true;
+            }
+
+            // TODO: quite similar to deployDependenciesForExistingFiles... maybe they should be merged or use each other
+            bool AppDir::deployDependenciesOnlyForElfFile(const boost::filesystem::path& elfFilePath, bool failSilentForNonElfFile) {
+                // preconditions: file must be an ELF one, and file must be contained in the AppDir
+                const auto absoluteElfFilePath = bf::absolute(elfFilePath);
+
+                // can't bundle directories
+                if (!bf::is_regular_file(absoluteElfFilePath)) {
+                    ldLog() << LD_DEBUG << "Skipping non-file directory entry:" << absoluteElfFilePath << std::endl;
+                    return false;
+                }
+
+                // to do a proper prefix check, we need a proper absolute path for the AppDir
+                const auto absoluteAppDirPath = bf::absolute(this->path());
+                ldLog() << LD_DEBUG << "absolute AppDir path:" << absoluteAppDirPath << std::endl;
+
+                // a fancy way to check STL strings for prefixes is to "ab"use rfind
+                if (absoluteElfFilePath.string().rfind(absoluteAppDirPath.string()) != 0) {
+                    ldLog() << LD_ERROR << "File" << absoluteElfFilePath << "is not contained in AppDir, its dependencies cannot be deployed into the AppDir" << std::endl;
+                    return false;
+                }
+
+                // make sure we have an ELF file
+                try {
+                    elf::ElfFile(absoluteElfFilePath.string());
+                } catch (const elf::ElfFileParseError& e) {
+                    auto level = LD_ERROR;
+
+                    if (failSilentForNonElfFile) {
+                        level = LD_WARNING;
+                    }
+
+                    ldLog() << level << "Not an ELF file:" << absoluteElfFilePath << std::endl;
+
+                    return failSilentForNonElfFile;
+                }
+
+                // relative path makes for a nicer and more consistent log
+                ldLog() << "Deploying dependencies for ELF file in AppDir:" << elfFilePath << std::endl;
+
+                // bundle dependencies
+                if (!d->deployElfDependencies(absoluteElfFilePath))
+                    return false;
+
+                // set rpath correctly
+                const auto rpathDestination = this->path() / "usr/lib";
+                ldLog() << LD_DEBUG << "rpath destination:" << rpathDestination << std::endl;
+
+                const auto rpath = PrivateData::calculateRelativeRPath(elfFilePath.parent_path(), rpathDestination);
+                ldLog() << LD_DEBUG << "Calculated rpath:" << rpath << std::endl;
+
+                d->setElfRPathOperations[absoluteElfFilePath] = rpath;
 
                 return true;
             }

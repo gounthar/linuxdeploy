@@ -2,16 +2,17 @@
 #include <fstream>
 #include <memory>
 #include <utility>
+#include <fcntl.h>
 
 // library includes
 #include <boost/regex.hpp>
-#include <subprocess.hpp>
 #include <sys/mman.h>
 
 // local headers
 #include "linuxdeploy/core/elf.h"
 #include "linuxdeploy/core/log.h"
 #include "linuxdeploy/util/util.h"
+#include "linuxdeploy/subprocess/subprocess.h"
 
 using namespace linuxdeploy::core::log;
 
@@ -147,8 +148,8 @@ namespace linuxdeploy {
 
                 std::vector<bf::path> paths;
 
-                std::map<std::string, std::string> env;
-                env.insert(std::make_pair(std::string("LC_ALL"), std::string("C")));
+                subprocess::subprocess_env_map_t env;
+                env["LC_ALL"] = "C";
 
                 // workaround for https://sourceware.org/bugzilla/show_bug.cgi?id=25263
                 // when you pass an absolute path to ldd, it can find libraries referenced in the rpath properly
@@ -156,19 +157,23 @@ namespace linuxdeploy {
                 // note that this is just a bug in ldd, the linker has always worked as intended
                 const auto resolvedPath = bf::canonical(d->path);
 
-                subprocess::Popen lddProc(
-                        {"ldd", resolvedPath.string().c_str()},
-                        subprocess::output{subprocess::PIPE},
-                        subprocess::error{subprocess::PIPE},
-                        subprocess::environment(env)
-                );
+                subprocess::subprocess lddProc({"ldd", resolvedPath.string()}, env);
 
-                auto outputAndError = util::subprocess::check_output_error(lddProc);
+                const auto result = lddProc.run();
+
+                if (result.exit_code() != 0) {
+                    if (result.stdout_string().find("not a dynamic executable") != std::string::npos || result.stderr_string().find("not a dynamic executable") != std::string::npos) {
+                        ldLog() << LD_WARNING << this->d->path << "is not linked dynamically" << std::endl;
+                        return {};
+                    }
+
+                    throw std::runtime_error{"Failed to run ldd: exited with code " + std::to_string(result.exit_code())};
+                }
 
                 const boost::regex expr(R"(\s*(.+)\s+\=>\s+(.+)\s+\((.+)\)\s*)");
                 boost::smatch what;
 
-                for (const auto& line : util::splitLines(outputAndError.first)) {
+                for (const auto& line : util::splitLines(result.stdout_string())) {
                     if (boost::regex_search(line, what, expr)) {
                         auto libraryPath = what[2].str();
                         util::trim(libraryPath);
@@ -195,30 +200,26 @@ namespace linuxdeploy {
                 const auto patchelfPath = PrivateData::getPatchelfPath();
 
                 try {
-                    subprocess::Popen patchelfProc(
-                        {patchelfPath.c_str(), "--print-rpath", d->path.c_str()},
-                        subprocess::output(subprocess::PIPE),
-                        subprocess::error(subprocess::PIPE)
-                    );
+                    subprocess::subprocess patchelfProc({patchelfPath, "--print-rpath", d->path.string()});
 
-                    auto patchelfOutput = util::subprocess::check_output_error(patchelfProc);
-                    auto& patchelfStdout = patchelfOutput.first;
-                    auto& patchelfStderr = patchelfOutput.second;
+                    const auto result = patchelfProc.run();
 
-                    if (patchelfProc.retcode() != 0) {
+                    if (result.exit_code() != 0) {
                         // if file is not an ELF executable, there is no need for a detailed error message
-                        if (patchelfProc.retcode() == 1 && patchelfStderr.find("not an ELF executable")) {
+                        if (result.exit_code() == 1 && result.stderr_string().find("not an ELF executable") != std::string::npos) {
                             return "";
                         } else {
-                            ldLog() << LD_ERROR << "Call to patchelf failed:" << std::endl << patchelfStderr;
+                            ldLog() << LD_ERROR << "Call to patchelf failed:" << std::endl << result.stderr_string();
                             return "";
                         }
                     }
 
-                    util::trim(patchelfStdout, '\n');
-                    util::trim(patchelfStdout);
+                    auto stdoutContents = result.stdout_string();
 
-                    return patchelfStdout;
+                    util::trim(stdoutContents, '\n');
+                    util::trim(stdoutContents);
+
+                    return stdoutContents;
                 } catch (const std::exception&) {
                     return "";
                 }
@@ -229,17 +230,12 @@ namespace linuxdeploy {
                 const auto patchelfPath = PrivateData::getPatchelfPath();
 
                 try {
-                    subprocess::Popen patchelfProc(
-                        {patchelfPath.c_str(), "--set-rpath", value.c_str(), d->path.c_str()},
-                        subprocess::output(subprocess::PIPE),
-                        subprocess::error(subprocess::PIPE)
-                    );
+                    subprocess::subprocess patchelfProc({patchelfPath.c_str(), "--set-rpath", value.c_str(), d->path.c_str()});
 
-                    const auto patchelfOutput = util::subprocess::check_output_error(patchelfProc);
-                    const auto& patchelfStderr = patchelfOutput.second;
+                    const auto result = patchelfProc.run();
 
-                    if (patchelfProc.retcode() != 0) {
-                        ldLog() << LD_ERROR << "Call to patchelf failed:" << std::endl << patchelfStderr << std::endl;
+                    if (result.exit_code() != 0) {
+                        ldLog() << LD_ERROR << "Call to patchelf failed:" << std::endl << result.stderr_string() << std::endl;
                         return false;
                     }
                 } catch (const std::exception&) {

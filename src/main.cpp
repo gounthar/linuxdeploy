@@ -36,10 +36,13 @@ int main(int argc, char** argv) {
 
     args::ValueFlagList<std::string> executablePaths(parser, "executable", "Executable to deploy", {'e', "executable"});
 
+    args::ValueFlagList<std::string> deployDepsOnlyPaths(parser, "path", "Path to ELF file or directory containing such files (libraries or executables) in the AppDir whose dependencies shall be deployed by linuxdeploy without copying them into the AppDir", {"deploy-deps-only"});
+
     args::ValueFlagList<std::string> desktopFilePaths(parser, "desktop file", "Desktop file to deploy", {'d', "desktop-file"});
     args::Flag createDesktopFile(parser, "", "Create basic desktop file that is good enough for some tests", {"create-desktop-file"});
 
     args::ValueFlagList<std::string> iconPaths(parser, "icon file", "Icon to deploy", {'i', "icon-file"});
+    args::ValueFlag<std::string> iconTargetFilename(parser, "filename", "Filename all icons passed via -i should be renamed to", {"icon-filename"});
 
     args::ValueFlag<std::string> customAppRunPath(parser, "AppRun path", "Path to custom AppRun script (linuxdeploy will not create a symlink but copy this file instead)", {"custom-apprun"});
 
@@ -51,6 +54,21 @@ int main(int argc, char** argv) {
         parser.ParseCLI(argc, argv);
     } catch (args::Help&) {
         std::cerr << parser;
+
+        // license information
+        std::cerr << std::endl
+                  << "===== library information =====" << std::endl
+                  << std::endl
+                  << "This software uses the great CImg library, as well as libjpeg and libpng as well as various Boost libraries." << std::endl
+                  << std::endl
+                  << "libjpeg license information: this software is based in part on the work of the Independent JPEG Group" << std::endl
+                  << std::endl
+                  << "CImg license information: This software is governed either by the CeCILL or the CeCILL-C "
+                     "license under French law and abiding by the rules of distribution of free software. You can "
+                     "use, modify and or redistribute the software under the terms of the CeCILL or CeCILL-C "
+                     "licenses as circulated by CEA, CNRS and INRIA at the following URL: "
+                     "\"http://cecill.info\"." << std::endl;
+
         return 0;
     } catch (args::ParseError& e) {
         std::cerr << e.what() << std::endl;
@@ -118,12 +136,12 @@ int main(int argc, char** argv) {
 
         for (const auto& libraryPath : sharedLibraryPaths.Get()) {
             if (!bf::exists(libraryPath)) {
-                std::cerr << "No such file or directory: " << libraryPath << std::endl;
+                ldLog() << LD_ERROR << "No such file or directory: " << libraryPath << std::endl;
                 return 1;
             }
 
             if (!appDir.forceDeployLibrary(libraryPath)) {
-                std::cerr << "Failed to deploy library: " << libraryPath << std::endl;
+                ldLog() << LD_ERROR << "Failed to deploy library: " << libraryPath << std::endl;
                 return 1;
             }
         }
@@ -135,12 +153,42 @@ int main(int argc, char** argv) {
 
         for (const auto& executablePath : executablePaths.Get()) {
             if (!bf::exists(executablePath)) {
-                std::cerr << "No such file or directory: " << executablePath << std::endl;
+                ldLog() << LD_ERROR << "No such file or directory: " << executablePath << std::endl;
                 return 1;
             }
 
             if (!appDir.deployExecutable(executablePath)) {
-                std::cerr << "Failed to deploy executable: " << executablePath << std::endl;
+                ldLog() << LD_ERROR << "Failed to deploy executable: " << executablePath << std::endl;
+                return 1;
+            }
+        }
+    }
+
+    // deploy executables to usr/bin, and deploy their dependencies to usr/lib
+    if (deployDepsOnlyPaths) {
+        ldLog() << std::endl << "-- Deploying dependencies only for ELF files --" << std::endl;
+
+        for (const auto& path : deployDepsOnlyPaths.Get()) {
+            if (bf::is_directory(path)) {
+                ldLog() << "Deploying files in directory" << path << std::endl;
+
+                for (auto it = bf::directory_iterator{path}; it != bf::directory_iterator{}; ++it) {
+                    if (!bf::is_regular_file(*it)) {
+                        continue;
+                    }
+
+                    if (!appDir.deployDependenciesOnlyForElfFile(*it, true)) {
+                        ldLog() << LD_WARNING << "Failed to deploy dependencies for ELF file" << *it << LD_NO_SPACE << ", skipping" << std::endl;
+                        return 1;
+                    }
+                }
+            } else if (bf::is_regular_file(path)) {
+                if (!appDir.deployDependenciesOnlyForElfFile(path)) {
+                    ldLog() << LD_ERROR << "Failed to deploy dependencies for ELF file: " << path << std::endl;
+                    return 1;
+                }
+            } else {
+                ldLog() << LD_ERROR << "No such file or directory: " << path << std::endl;
                 return 1;
             }
         }
@@ -191,12 +239,20 @@ int main(int argc, char** argv) {
 
         for (const auto& iconPath : iconPaths.Get()) {
             if (!bf::exists(iconPath)) {
-                std::cerr << "No such file or directory: " << iconPath << std::endl;
+                ldLog() << LD_ERROR << "No such file or directory: " << iconPath << std::endl;
                 return 1;
             }
 
-            if (!appDir.deployIcon(iconPath)) {
-                std::cerr << "Failed to deploy icon: " << iconPath << std::endl;
+            bool iconDeployedSuccessfully;
+
+            if (iconTargetFilename) {
+                iconDeployedSuccessfully = appDir.deployIcon(iconPath, iconTargetFilename.Get());
+            } else {
+                iconDeployedSuccessfully = appDir.deployIcon(iconPath);
+            }
+
+            if (!iconDeployedSuccessfully) {
+                ldLog() << LD_ERROR << "Failed to deploy icon: " << iconPath << std::endl;
                 return 1;
             }
         }
@@ -207,14 +263,14 @@ int main(int argc, char** argv) {
 
         for (const auto& desktopFilePath : desktopFilePaths.Get()) {
             if (!bf::exists(desktopFilePath)) {
-                std::cerr << "No such file or directory: " << desktopFilePath << std::endl;
+                ldLog() << LD_ERROR << "No such file or directory: " << desktopFilePath << std::endl;
                 return 1;
             }
 
             desktopfile::DesktopFile desktopFile(desktopFilePath);
 
             if (!appDir.deployDesktopFile(desktopFile)) {
-                std::cerr << "Failed to deploy desktop file: " << desktopFilePath << std::endl;
+                ldLog() << LD_ERROR << "Failed to deploy desktop file: " << desktopFilePath << std::endl;
                 return 1;
             }
         }
@@ -283,8 +339,7 @@ int main(int argc, char** argv) {
             auto retcode = plugin->run(appDir.path());
 
             if (retcode != 0) {
-                ldLog() << LD_ERROR << "Failed to run plugin:" << pluginName << std::endl;
-                ldLog() << LD_DEBUG << "Exited with return code:" << retcode << std::endl;
+                ldLog() << LD_ERROR << "Failed to run plugin:" << pluginName << "(exit code:" << retcode << LD_NO_SPACE << ")" << std::endl;
                 return 1;
             }
         }

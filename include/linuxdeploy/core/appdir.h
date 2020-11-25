@@ -57,11 +57,19 @@ namespace linuxdeploy {
                     // deploy executable
                     bool deployExecutable(const boost::filesystem::path& path, const boost::filesystem::path& destination = "");
 
+                    // deploy dependencies for ELF file in AppDir, without copying it into the library dir
+                    //
+                    // the dependencies end up in the regular location
+                    bool deployDependenciesOnlyForElfFile(const boost::filesystem::path& elfFilePath, bool failSilentForNonElfFile = false);
+
                     // deploy desktop file
                     bool deployDesktopFile(const desktopfile::DesktopFile& desktopFile);
 
                     // deploy icon
                     bool deployIcon(const boost::filesystem::path& path);
+
+                    // deploy icon, changing its name to <target filename>.<ext>
+                    bool deployIcon(const boost::filesystem::path& path, const std::string& targetFilename);
 
                     // deploy arbitrary file
                     boost::filesystem::path deployFile(const boost::filesystem::path& from, const boost::filesystem::path& to);
