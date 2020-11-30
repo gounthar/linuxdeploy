@@ -1,0 +1,19 @@
+language: none
+
+sudo: required
+
+runtime:
+  nodePool: shippable_shared_aarch64
+ 
+env:
+  - secure: kI1APMOd8ss4RQ8rK/Y6cfu5X1V64kBOjKaWFBXYiHlTtf/puVs8k7YSidw5BdP2EpP2wO6MKtVi7tu3vKf13csymtA3gLtrsrPKzOTbiCN2mQJwVFVdy9YLBuV5wMnZTZ2aHU8aY4Ae+jW4jGryOMaw5LbaJWn7za7VwttTtZy8I50m3sTY94odDatVbilLFFArWlEQJn7YQAXgWeAGPKhoiNCA3iKVL38LW/Z6Snsga328kEVXaVmaBdRbq5xYM2XxA3TuYAPL5/nE7CteOHBcEmvRGxU2u/Mz2Z4+HRQJRWoIhCyWshFuadW8RW5+atIZgfdSLMjfidfoKBmiuA== 
+  
+build:
+ ci:
+  - curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+  - echo "set ssl:check-hostname no" > ~/.lftprc && cat ~/.lftprc
+  - apt update && apt upgrade && apt install git build-essential cmake qt4-qmake gfortran curl libarchive-dev libarchive13 expat lftp tar gzip
+  - chmod +x bootstrap && mkdir ../cmake-source && mv * .c* .g* .h* ../cmake-source && mv ../cmake-source . && mkdir cmake-build && cd cmake-build 
+  - ../cmake-source/bootstrap && make -j$(nproc)
+  - cd .. && mv cmake-build CMake-master-aarch64 && tar c CMake-master-aarch64 | gzip > CMake-master-aarch64.tar.gz 
+  - lftp -e 'put CMake-master-aarch64.tar.gz; bye' -u $FTP_USERNAME,$FTP_PASSWORD $FTP_HOST $FTP_USERNAME 
